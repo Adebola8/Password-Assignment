@@ -1,0 +1,224 @@
+/*
+ * Copyright 2018 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.core.view;
+
+import static androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP_PREFIX;
+
+import android.animation.ValueAnimator;
+import android.annotation.SuppressLint;
+import android.content.ClipData;
+import android.content.Context;
+import android.content.res.ColorStateList;
+import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
+import android.os.Build;
+import android.os.Bundle;
+import android.text.TextUtils;
+import android.util.Log;
+import android.util.SparseArray;
+import android.view.Display;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.PointerIcon;
+import android.view.VelocityTracker;
+import android.view.View;
+import android.view.ViewConfiguration;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
+import android.view.WindowManager;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityNodeProvider;
+
+import androidx.annotation.FloatRange;
+import androidx.annotation.IdRes;
+import androidx.annotation.IntDef;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.Px;
+import androidx.annotation.RequiresApi;
+import androidx.annotation.RestrictTo;
+import androidx.annotation.UiThread;
+import androidx.collection.ArrayMap;
+import androidx.core.R;
+import androidx.core.view.AccessibilityDelegateCompat.AccessibilityDelegateAdapter;
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat;
+import androidx.core.view.accessibility.AccessibilityNodeProviderCompat;
+import androidx.core.view.accessibility.AccessibilityViewCommand;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Helper for accessing features in {@link View}.
+ */
+public class ViewCompat {
+    private static final String TAG = "ViewCompat";
+
+    /** @hide */
+    @RestrictTo(LIBRARY_GROUP_PREFIX)
+    @IntDef({View.FOCUS_LEFT, View.FOCUS_UP, View.FOCUS_RIGHT, View.FOCUS_DOWN,
+            View.FOCUS_FORWARD, View.FOCUS_BACKWARD})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface FocusDirection {}
+
+    /** @hide */
+    @RestrictTo(LIBRARY_GROUP_PREFIX)
+    @IntDef({View.FOCUS_LEFT, View.FOCUS_UP, View.FOCUS_RIGHT, View.FOCUS_DOWN})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface FocusRealDirection {}
+
+    /** @hide */
+    @RestrictTo(LIBRARY_GROUP_PREFIX)
+    @IntDef({View.FOCUS_FORWARD, View.FOCUS_BACKWARD})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface FocusRelativeDirection {}
+
+    @IntDef({OVER_SCROLL_ALWAYS, OVER_SCROLL_IF_CONTENT_SCROLLS, OVER_SCROLL_NEVER})
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface OverScroll {}
+
+    /**
+     * Always allow a user to over-scroll this view, provided it is a
+     * view that can scroll.
+     * @deprecated Use {@link View#OVER_SCROLL_ALWAYS} directly. This constant will be removed in
+     * a future release.
+     */
+    @Deprecated
+    public static final int OVER_SCROLL_ALWAYS = 0;
+
+    /**
+     * Allow a user to over-scroll this view only if the content is large
+     * enough to meaningfully scroll, provided it is a view that can scroll.
+     * @deprecated Use {@link View#OVER_SCROLL_IF_CONTENT_SCROLLS} directly. This constant will be
+     * removed in a future release.
+     */
+    @Deprecated
+    public static final int OVER_SCROLL_IF_CONTENT_SCROLLS = 1;
+
+    /**
+     * Never allow a user to over-scroll this view.
+     * @deprecated Use {@link View#OVER_SCROLL_NEVER} directly. This constant will be removed in
+     * a future release.
+     */
+    @Deprecated
+    public static final int OVER_SCROLL_NEVER = 2;
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    @IntDef({
+            View.IMPORTANT_FOR_AUTOFILL_AUTO,
+            View.IMPORTANT_FOR_AUTOFILL_YES,
+            View.IMPORTANT_FOR_AUTOFILL_NO,
+            View.IMPORTANT_FOR_AUTOFILL_YES_EXCLUDE_DESCENDANTS,
+            View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface AutofillImportance {}
+
+    @IntDef({
+            IMPORTANT_FOR_ACCESSIBILITY_AUTO,
+            IMPORTANT_FOR_ACCESSIBILITY_YES,
+            IMPORTANT_FOR_ACCESSIBILITY_NO,
+            IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface ImportantForAccessibility {}
+
+    /**
+     * Automatically determine whether a view is important for accessibility.
+     */
+    public static final int IMPORTANT_FOR_ACCESSIBILITY_AUTO = 0x00000000;
+
+    /**
+     * The view is important for accessibility.
+     */
+    public static final int IMPORTANT_FOR_ACCESSIBILITY_YES = 0x00000001;
+
+    /**
+     * The view is not important for accessibility.
+     */
+    public static final int IMPORTANT_FOR_ACCESSIBILITY_NO = 0x00000002;
+
+    /**
+     * The view is not important for accessibility, nor are any of its
+     * descendant views.
+     */
+    public static final int IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS = 0x00000004;
+
+    @IntDef({
+            ACCESSIBILITY_LIVE_REGION_NONE,
+            ACCESSIBILITY_LIVE_REGION_POLITE,
+            ACCESSIBILITY_LIVE_REGION_ASSERTIVE
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface AccessibilityLiveRegion {}
+
+    /**
+     * Live region mode specifying that accessibility services should not
+     * automatically announce changes to this view. This is the default live
+     * region mode for most views.
+     * <p>
+     * Use with {@link ViewCompat#setAccessibilityLiveRegion(View, int)}.
+     */
+    public static final int ACCESSIBILITY_LIVE_REGION_NONE = 0x00000000;
+
+    /**
+     * Live region mode specifying that accessibility services should announce
+     * changes to this view.
+     * <p>
+     * Use with {@link ViewCompat#setAccessibilityLiveRegion(View, int)}.
+     */
+    public static final int ACCESSIBILITY_LIVE_REGION_POLITE = 0x00000001;
+
+    /**
+     * Live region mode specifying that accessibility services should interrupt
+     * ongoing speech to immediately announce changes to this view.
+     * <p>
+     * Use with {@link ViewCompat#setAccessibilityLiveRegion(View, int)}.
+     */
+    public static final int ACCESSIBILITY_LIVE_REGION_ASSERTIVE = 0x00000002;
+
+    @IntDef({View.LAYER_TYPE_NONE, View.LAYER_TYPE_SOFTWARE, View.LAYER_TYPE_HARDWARE})
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface LayerType {}
+
+    /**
+     * Indicates that the view does not have a layer.
+     *
+     * @deprecated Use {@link View#LAYER_TYPE_NONE} directly.
+     */
+    @Deprecated
+    public static final int LAYER_TYPE_NONE = 0;
+
+    /**
+     * <p>Indicate
